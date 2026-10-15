@@ -74,8 +74,11 @@ import { verifySep8 } from './protocols/sep8.js';
 import { verifySep38 } from './protocols/sep38.js';
 import { verifySep24 } from './protocols/sep24.js';
 import { verifySep12 } from './protocols/sep12.js';
+import { verifySep12Deletion } from './protocols/sep12-deletion.js';
 import { verifySep30 } from './protocols/sep30.js';
+import { verifySep24QuoteLock } from './protocols/sep24-quote-lock.js';
 import { checkCollateralGovernance } from './security/collateral-governance.js';
+import { simulateClawback } from './security/clawback-simulator.js';
 import { checkHistoryPublish } from './history/publish-validator.js';
 import { checkArchiveDiff } from './history/archive-diff.js';
 import { checkBucketIntegrity } from './history/bucket-auditor.js';
@@ -168,7 +171,10 @@ interface Cli {
   verifySep38?: boolean;
   verifySep24?: boolean;
   verifySep12?: boolean;
+  verifySep12Deletion?: boolean;
   verifySep30?: boolean;
+  verifySep24QuoteLock?: boolean;
+  verifyClawback?: boolean;
   crawlPeers: boolean;
   verifyDnssec: boolean;
   verifyOverlay: boolean;
@@ -274,6 +280,12 @@ OPTIONS
       --verify-sep8       Simulate SEP-8 regulated asset compliance approval server interaction
       --verify-sep38      Audit SEP-38 quote coverage, bid-ask spread, and quote expirations
       --verify-sep24      Audit SEP-24 hosted deposit/withdrawal flow against the transfer server
+      --verify-sep12      Audit SEP-12 KYC customer verification against the KYC server
+      --verify-sep12-deletion
+                          Verify SEP-12 DELETE /customer endpoint (GDPR right-to-be-forgotten)
+      --verify-sep24-quote-lock
+                          Audit SEP-24 interactive deposit fee quote stability across session
+      --verify-clawback   Verify asset clawback authority (CAP-35) via Horizon and Soroban RPC
       --crawl-peers       Discover overlay peers with GET_PEERS and check connectivity
       --verify-buckets    With --check-network: download a sample of the archive
                           buckets a validator publishes, verify each against the
@@ -518,6 +530,18 @@ async function main(argv: string[]): Promise<number> {
             ...(cli.verifySep24
               ? await verifySep24(domainResult.parsed, fetchImpl, { rules })
               : []),
+            ...(cli.verifySep12Deletion && cli.checkNetwork
+              ? await verifySep12Deletion(domainResult.parsed, fetchImpl, { rules })
+              : []),
+            ...(cli.verifySep24QuoteLock && cli.checkNetwork
+              ? await verifySep24QuoteLock(domainResult.parsed, fetchImpl, { rules })
+              : []),
+            ...(cli.verifyClawback && cli.checkNetwork
+              ? await simulateClawback(domainResult.parsed, fetchImpl, {
+                  rules,
+                  ...(cli.sorobanRpc !== undefined ? { rpcUrl: cli.sorobanRpc } : {}),
+                })
+              : []),
             ...(cli.crawlPeers && cli.mockFixtures === undefined
               ? await checkOverlayPeers(domainResult.parsed, { rules })
               : []),
@@ -706,6 +730,27 @@ async function main(argv: string[]): Promise<number> {
             if (cli.verifySep12 && cli.checkNetwork) {
               networkDiagnostics.push(
                 ...(await verifySep12(fileResult.parsed, fetchImpl, { rules })),
+              );
+            }
+
+            if (cli.verifySep12Deletion && cli.checkNetwork) {
+              networkDiagnostics.push(
+                ...(await verifySep12Deletion(fileResult.parsed, fetchImpl, { rules })),
+              );
+            }
+
+            if (cli.verifySep24QuoteLock && cli.checkNetwork) {
+              networkDiagnostics.push(
+                ...(await verifySep24QuoteLock(fileResult.parsed, fetchImpl, { rules })),
+              );
+            }
+
+            if (cli.verifyClawback && cli.checkNetwork) {
+              networkDiagnostics.push(
+                ...(await simulateClawback(fileResult.parsed, fetchImpl, {
+                  rules,
+                  ...(cli.sorobanRpc !== undefined ? { rpcUrl: cli.sorobanRpc } : {}),
+                })),
               );
             }
             if (cli.checkNetwork) {
@@ -1471,6 +1516,18 @@ function parseArgs(argv: string[]): Cli | 'handled' {
 
       case '--verify-sep12':
         cli.verifySep12 = true;
+        break;
+
+      case '--verify-sep12-deletion':
+        cli.verifySep12Deletion = true;
+        break;
+
+      case '--verify-sep24-quote-lock':
+        cli.verifySep24QuoteLock = true;
+        break;
+
+      case '--verify-clawback':
+        cli.verifyClawback = true;
         break;
 
       case '--verify-sep30':

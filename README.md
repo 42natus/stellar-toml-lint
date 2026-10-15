@@ -189,6 +189,11 @@ Exit codes: **0** no errors, **1** problems found, **2** bad usage or I/O failur
 | `--verify-sep30`            | Validate RECOVERY_SERVER /accounts endpoint and signer public keys (requires `--check-network`)                         |
 | `--verify-sep8`             | Simulate SEP-8 regulated asset compliance approval server interaction (requires `--check-network`)                      |
 | `--verify-sep38`            | Audit SEP-38 quote coverage, bid-ask spread, and quote expirations (requires `--check-network`)                         |
+| `--verify-sep24`            | Audit SEP-24 hosted deposit/withdrawal flow against the transfer server (requires `--check-network`)                    |
+| `--verify-sep12`            | Audit SEP-12 KYC customer verification against the KYC server (requires `--check-network`)                              |
+| `--verify-sep12-deletion`   | Verify SEP-12 DELETE /customer endpoint (GDPR right-to-be-forgotten) (requires `--check-network`)                       |
+| `--verify-sep24-quote-lock` | Audit SEP-24 interactive deposit fee quote stability across session (requires `--check-network`)                        |
+| `--verify-clawback`         | Verify asset clawback authority (CAP-35) via Horizon and Soroban RPC (requires `--check-network`)                       |
 | `--check-contracts`         | Verify Soroban contract/WASM TTL and the SEP-45 auth interface online                                                   |
 | `--soroban-rpc <url>`       | Soroban RPC endpoint for `--check-contracts` (defaults from `NETWORK_PASSPHRASE`)                                       |
 | `--simulate-soroban`        | With `--check-network`: dry-run the SEP-41 read calls against the Soroban RPC                                           |
@@ -276,6 +281,10 @@ failure.
 | `--verify-sep30`            | Validate RECOVERY_SERVER /accounts endpoint and signer public keys (requires `--check-network`)                                                                                                             |
 | `--verify-sep38`            | Audit SEP-38 quote coverage, bid-ask spread, and quote expirations (requires `--check-network`)                                                                                                             |
 | `--verify-sep24`            | Audit SEP-24 hosted deposit/withdrawal flow: `/info` currency coverage, numeric fee schemas, and HTTPS interactive session URLs (requires `--check-network`)                                                |
+| `--verify-sep12`            | Audit SEP-12 KYC customer verification against the KYC server (requires `--check-network`)                                                                                                                |
+| `--verify-sep12-deletion`   | Verify SEP-12 DELETE /customer endpoint for GDPR right-to-be-forgotten compliance (requires `--check-network`)                                                                                            |
+| `--verify-sep24-quote-lock` | Audit SEP-24 interactive deposit fee quote stability across session (requires `--check-network`)                                                                                                          |
+| `--verify-clawback`         | Verify asset clawback authority (CAP-35) via Horizon and Soroban RPC (requires `--check-network`)                                                                                                       |
 | `--crawl-peers`             | Discover validator peers with overlay `GET_PEERS` messages (requires `--check-network`)                                                                                                                     |
 | `--verify-buckets`          | Download a sample of each archive's `currentBuckets`, verify the SHA-256 of the decompressed stream, and decode the XDR `BucketEntry` stream (requires `--check-network`)                                   |
 | `--verify-overlay`          | Complete the overlay TCP handshake with each `[[VALIDATORS]]` HOST and check its network, node ID, and protocol version (requires `--check-network`)                                                        |
@@ -2052,3 +2061,73 @@ The suite exercises three endpoints end to end:
 Servers that return 403 (SEP-10 auth required) or 404 (unknown customer) are
 treated as silence rather than a finding, matching the SEP-38 suite's
 behaviour for auth-gated anchors.
+
+### SEP-12 customer deletion (`--verify-sep12-deletion`)
+
+Verifies the SEP-12 `DELETE /customer` endpoint for GDPR/CCPA right-to-be-forgotten
+compliance. Requires `--check-network --verify-sep12-deletion`.
+
+    stellar-toml-lint public/.well-known/stellar.toml --check-network --verify-sep12-deletion
+
+The suite:
+1. Creates a test sandbox customer via `PUT /customer`
+2. Dispatches `DELETE /customer/<id>` authenticated with a test JWT
+3. Verifies HTTP 200/204 response
+4. Re-queries `GET /customer/<id>` and verifies the record is purged or marked `DELETED`/`INACTIVE`/`PURGED`
+
+Diagnostics emitted:
+
+| Rule                                        | Severity | When it fires                                                                                      |
+| ------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------- |
+| `sep12/delete-customer-unsupported`         | warning  | `DELETE /customer` returns 405 Method Not Allowed, 501 Not Implemented, or fails                   |
+| `sep12/customer-record-retention-failure`   | error    | `GET /customer` after `DELETE` returns a status other than `DELETED`, `INACTIVE`, or `PURGED`      |
+
+### SEP-24 interactive deposit quote lock (`--verify-sep24-quote-lock`)
+
+Audits that an SEP-24 interactive deposit session locks the quoted fee for the
+entire session duration. Requires `--check-network --verify-sep24-quote-lock`.
+
+    stellar-toml-lint public/.well-known/stellar.toml --check-network --verify-sep24-quote-lock
+
+The suite:
+1. Initiates an interactive deposit request via `POST /transactions/deposit/interactive`
+2. Extracts the initial quoted fee breakdown (`fixed`, `percent`, `minimum`, `maximum`)
+3. Polls `GET /transaction/<id>` over 60 seconds (configurable via `--poll-interval` and `--poll-duration`)
+4. Asserts the quoted fee remains locked and unchanged
+
+Diagnostics emitted:
+
+| Rule                          | Severity | When it fires                                                       |
+| ----------------------------- | -------- | ------------------------------------------------------------------- |
+| `sep24/quote-fee-instability` | error    | Quoted fee (`fixed`, `percent`, `minimum`, or `maximum`) changes mid-session |
+
+### Asset clawback transaction simulator (`--verify-clawback`)
+
+Simulates CAP-35 asset clawback operations to verify regulatory authority.
+Requires `--check-network --verify-clawback` (and `--rpc-url` for Soroban assets).
+
+    stellar-toml-lint public/.well-known/stellar.toml --check-network --verify-clawback --rpc-url https://soroban-rpc.example.com
+
+The suite:
+1. Iterates all `[[CURRENCIES]]` entries with `clawback_enabled: true`
+2. For classic assets (issuer): queries Horizon for the issuer account and verifies a signer has weight >= `high_threshold` for `ClawbackOp`
+3. For Soroban assets (contract): dry-runs a `clawback` invocation via Soroban RPC `simulateTransaction`
+4. Verifies `desc` field contains AML/sanctions/compliance explanation
+
+Diagnostics emitted:
+
+| Rule                                  | Severity | When it fires                                                                                          |
+| ------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------ |
+| `security/clawback-permission-mismatch` | error    | Issuer lacks sufficient signer weight, Soroban simulation fails, or compliance explanation missing     |
+
+### Memory leak detection for daemon mode
+
+Runs 10,000 consecutive lint cycles and asserts zero heap growth. Requires `--expose-gc` flag.
+
+    node --expose-gc ./node_modules/.bin/vitest run test/memory/leak-detector.test.ts
+
+The test:
+- Executes 10,000 continuous lint cycles on synthetic AST documents
+- Forces garbage collection (`global.gc()`) and compares heap snapshots
+- Asserts retained heap size delta is < 1MB
+- Verifies CST cache nodes and event listeners are properly collected
