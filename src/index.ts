@@ -357,6 +357,28 @@ export {
 export type { Sep38QuoteOptions } from './protocols/sep38.js';
 
 export {
+  verifySep12Deletion,
+  DELETE_CUSTOMER_UNSUPPORTED_RULE,
+  CUSTOMER_RECORD_RETENTION_FAILURE_RULE,
+  sep12DeletionRules,
+} from './protocols/sep12-deletion.js';
+export type { Sep12DeletionOptions } from './protocols/sep12-deletion.js';
+
+export {
+  simulateClawback,
+  CLAWBACK_PERMISSION_MISMATCH_RULE,
+  clawbackSimulatorRules,
+} from './security/clawback-simulator.js';
+export type { ClawbackSimulatorOptions } from './security/clawback-simulator.js';
+
+export {
+  verifySep24QuoteLock,
+  QUOTE_FEE_INSTABILITY_RULE,
+  sep24QuoteLockRules,
+} from './protocols/sep24-quote-lock.js';
+export type { Sep24QuoteLockOptions } from './protocols/sep24-quote-lock.js';
+
+export {
   auditContractWasm,
   auditTomlContractWasm,
   verifySep41Wasm,
